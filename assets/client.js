@@ -73,47 +73,27 @@ function enumerateInputDevices() {
     });
 }
 
-function negotiate() {
-    return pc.createOffer().then((offer) => {
-        return pc.setLocalDescription(offer);
-    }).then(() => {
-        // wait for ICE gathering to complete
-        return new Promise((resolve) => {
-            if (pc.iceGatheringState === 'complete') {
-                resolve();
-            } else {
-                function checkState() {
-                    if (pc.iceGatheringState === 'complete') {
-                        pc.removeEventListener('icegatheringstatechange', checkState);
-                        resolve();
-                    }
-                }
-                pc.addEventListener('icegatheringstatechange', checkState);
-            }
-        });
-    }).then(() => {
-        var offer = pc.localDescription;
+async function negotiate() {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
 
-        document.getElementById('offer-sdp').textContent = offer.sdp;
-        return fetch('/', {
-            body: offer.sdp,
-            headers: {
-                'Content-Type': 'application/sdp'
-            },
-            method: 'POST'
-        });
-    }).then((response) => {
-        return response.text();
-    }).then((sdp) => {
-        const answer = new RTCSessionDescription({
-            type: 'answer',
-            sdp: sdp
-        });
-        document.getElementById('answer-sdp').textContent = sdp;
-        return pc.setRemoteDescription(answer);
-    }).catch((e) => {
-        alert(e);
+    document.getElementById('offer-sdp').textContent = offer.sdp;
+    const response = await fetch('/', {
+        body: offer.sdp,
+        headers: {
+            'Content-Type': 'application/sdp'
+        },
+        method: 'POST'
     });
+ 
+    const sdp = await response.text();
+    console.log(sdp)
+    const answer = new RTCSessionDescription({
+        type: 'answer',
+        sdp: sdp
+    });
+    document.getElementById('answer-sdp').textContent = sdp;
+    await pc.setRemoteDescription(answer);
 }
 
 function start() {
@@ -197,12 +177,12 @@ function start() {
             stream.getTracks().forEach((track) => {
                 pc.addTrack(track, stream);
             });
-            return negotiate();
+            return negotiate().catch(alert);
         }, (err) => {
             alert('Could not acquire media: ' + err);
         });
     } else {
-        negotiate();
+        negotiate().catch(alert);
     }
 
     document.getElementById('stop').style.display = 'inline-block';
