@@ -6,7 +6,7 @@ import ssl
 import uuid
 
 from aiohttp import web
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, RTCConfiguration
 
 from av import AudioFrame, AudioResampler
 
@@ -37,12 +37,13 @@ class RTCConnection:
     recv_track = None
     send_track = None
     pc = None
+    genai_session = None
 
     async def handle_offer(self, request):
         content = await request.text()
         offer = RTCSessionDescription(sdp=content, type="offer")
 
-        self.pc = RTCPeerConnection()
+        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
         
         asyncio.ensure_future(self._run())
 
@@ -107,6 +108,8 @@ class RTCConnection:
             while True:
                 try:
                     frame = await self.recv_track.recv()
+                    if not self.genai_session:
+                        continue
                     for frame in resampler.resample(frame):
                         blob = genai.types.BlobDict(
                             data=frame.to_ndarray().tobytes(), 
