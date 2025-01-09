@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import fractions
 import logging
+import re
 import ssl
 import uuid
 
@@ -14,6 +15,7 @@ from google import genai
 
 
 AUDIO_PTIME = 0.02
+AUDIO_BITRATE = 16000
 MODEL = "gemini-2.0-flash-exp"
 
 client = genai.Client(http_options={'api_version': 'v1alpha'})
@@ -52,9 +54,14 @@ class RTCConnection:
         answer = await self.pc.createAnswer()
         await self.pc.setLocalDescription(answer)
 
+        sdp = self.pc.localDescription.sdp
+        found = re.findall(r"a=rtpmap:(\d+) opus/48000/2", sdp)
+        if found:
+            sdp = sdp.replace("opus/48000/2\r\n", "opus/48000/2\r\n" + f"a=fmtp:{found[0]} useinbandfec=1;usedtx=1;maxaveragebitrate={AUDIO_BITRATE}\r\n")
+
         return web.Response(
             content_type="application/sdp",
-            text=self.pc.localDescription.sdp,
+            text=sdp,
         )
 
     async def _run(self):
