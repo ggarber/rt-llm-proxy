@@ -16,7 +16,7 @@ This repository contains a Python server proof of concept that acts as a proxy f
 
 2. Open the test page in your browser and navigate to:
    ```
-   http://localhost:8080/assets/index.html
+   http://localhost:8080/demo/index.html
    ```
 
 3. Click **Start** and begin talking with the LLM

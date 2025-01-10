@@ -1,40 +1,20 @@
 // get DOM elements
 const dataChannelLog = document.getElementById('data-channel'),
-      iceConnectionLog = document.getElementById('ice-connection-state'),
-      iceGatheringLog = document.getElementById('ice-gathering-state'),
-      signalingLog = document.getElementById('signaling-state');
+      iceConnectionLog = document.getElementById('ice-connection-state');
 
-// peer connection
 var pc = null;
-
-// data channel
-var dc = null, dcInterval = null;
+var dc = null;
 
 function createPeerConnection() {
     var config = {
     };
 
-    if (document.getElementById('use-stun').checked) {
-        config.iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }];
-    }
-
     pc = new RTCPeerConnection(config);
-
-    // register some listeners to help debugging
-    pc.addEventListener('icegatheringstatechange', () => {
-        iceGatheringLog.textContent += ' -> ' + pc.iceGatheringState;
-    }, false);
-    iceGatheringLog.textContent = pc.iceGatheringState;
 
     pc.addEventListener('iceconnectionstatechange', () => {
         iceConnectionLog.textContent += ' -> ' + pc.iceConnectionState;
     }, false);
     iceConnectionLog.textContent = pc.iceConnectionState;
-
-    pc.addEventListener('signalingstatechange', () => {
-        signalingLog.textContent += ' -> ' + pc.signalingState;
-    }, false);
-    signalingLog.textContent = pc.signalingState;
 
     // connect audio / video
     pc.addEventListener('track', (evt) => {
@@ -77,7 +57,6 @@ async function negotiate() {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    document.getElementById('offer-sdp').textContent = offer.sdp;
     const response = await fetch('/', {
         body: offer.sdp,
         headers: {
@@ -92,7 +71,6 @@ async function negotiate() {
         type: 'answer',
         sdp: sdp
     });
-    document.getElementById('answer-sdp').textContent = sdp;
     await pc.setRemoteDescription(answer);
 }
 
@@ -101,48 +79,22 @@ function start() {
 
     pc = createPeerConnection();
 
-    var time_start = null;
-
-    const current_stamp = () => {
-        if (time_start === null) {
-            time_start = new Date().getTime();
-            return 0;
-        } else {
-            return new Date().getTime() - time_start;
-        }
-    };
-
-    if (document.getElementById('use-datachannel').checked) {
-        var parameters = JSON.parse(document.getElementById('datachannel-parameters').value);
-
-        dc = pc.createDataChannel('chat', parameters);
-        dc.addEventListener('close', () => {
-            clearInterval(dcInterval);
-            dataChannelLog.textContent += '- close\n';
-        });
-        dc.addEventListener('open', () => {
-            dataChannelLog.textContent += '- open\n';
-            // dcInterval = setInterval(() => {
-            //     var message = 'ping ' + current_stamp();
-            //     dataChannelLog.textContent += '> ' + message + '\n';
-            //     dc.send(message);
-            // }, 1000);
-        });
-        dc.addEventListener('message', (evt) => {
-            dataChannelLog.textContent += '< ' + evt.data + '\n';
-
-            if (evt.data.substring(0, 4) === 'pong') {
-                var elapsed_ms = current_stamp() - parseInt(evt.data.substring(5), 10);
-                dataChannelLog.textContent += ' RTT ' + elapsed_ms + ' ms\n';
-            }
-        });
-    }
+    dc = pc.createDataChannel('data', { ordered: true });
+    dc.addEventListener('close', () => {
+        dataChannelLog.textContent += '- close\n';
+    });
+    dc.addEventListener('open', () => {
+        dataChannelLog.textContent += '- open\n';
+    });
+    dc.addEventListener('message', (evt) => {
+        dataChannelLog.textContent += '< ' + evt.data + '\n';
+    });
 
     // Build media constraints.
 
     const constraints = {
         audio: false,
-        video: false
+        video: false,
     };
 
     if (document.getElementById('use-audio').checked) {
@@ -157,7 +109,7 @@ function start() {
     }
 
     if (document.getElementById('use-video').checked) {
-        const videoConstraints = {};
+        const videoConstraints = { frameRate: { max: 1 } };
 
         const device = document.getElementById('video-input').value;
         if (device) {
@@ -166,8 +118,6 @@ function start() {
 
         constraints.video = Object.keys(videoConstraints).length ? videoConstraints : true;
     }
-
-    // Acquire media and start negociation.
 
     if (constraints.audio || constraints.video) {
         if (constraints.video) {
@@ -191,29 +141,10 @@ function start() {
 function stop() {
     document.getElementById('stop').style.display = 'none';
 
-    // close data channel
-    if (dc) {
-        dc.close();
-    }
-
-    // close transceivers
-    if (pc.getTransceivers) {
-        pc.getTransceivers().forEach((transceiver) => {
-            if (transceiver.stop) {
-                transceiver.stop();
-            }
-        });
-    }
-
-    // close local audio / video
-    pc.getSenders().forEach((sender) => {
-        sender.track.stop();
-    });
-
-    // close peer connection
-    setTimeout(() => {
+    if (pc) {
         pc.close();
-    }, 500);
+        pc = null;
+    }
 }
 
 enumerateInputDevices();
