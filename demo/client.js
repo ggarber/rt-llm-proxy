@@ -74,7 +74,7 @@ async function negotiate() {
     await pc.setRemoteDescription(answer);
 }
 
-function start() {
+async function start() {
     document.getElementById('start').style.display = 'none';
 
     pc = createPeerConnection();
@@ -109,7 +109,7 @@ function start() {
     }
 
     if (document.getElementById('use-video').checked) {
-        const videoConstraints = { frameRate: { max: 1 } };
+        const videoConstraints = { width: { max: 320 }, height: { max: 240 } };
 
         const device = document.getElementById('video-input').value;
         if (device) {
@@ -120,25 +120,29 @@ function start() {
     }
 
     if (constraints.audio || constraints.video) {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        stream.getTracks().forEach((track) => {
+            if (track.kind === 'video') {
+                track = track.clone();
+                track.applyConstraints({
+                    frameRate: 1,
+                });
+            }
+            pc.addTrack(track, stream);
+        });
         if (constraints.video) {
             document.getElementById('media').style.display = 'block';
+            document.getElementById('video').srcObject = stream;
         }
-        navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
-            stream.getTracks().forEach((track) => {
-                pc.addTrack(track, stream);
-            });
-            return negotiate().catch(alert);
-        }, (err) => {
-            alert('Could not acquire media: ' + err);
-        });
+        await negotiate();
     } else {
-        negotiate().catch(alert);
+        await negotiate();
     }
 
     document.getElementById('stop').style.display = 'inline-block';
 }
 
-function stop() {
+async function stop() {
     document.getElementById('stop').style.display = 'none';
 
     if (pc) {

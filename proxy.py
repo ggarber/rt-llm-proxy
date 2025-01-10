@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import fractions
+import io
 import logging
 import re
 import ssl
@@ -36,7 +37,8 @@ class SendingTrack(MediaStreamTrack):
     
 
 class RTCConnection:
-    recv_track = None
+    recv_audio_track = None
+    recv_video_track = None
     send_track = None
     pc = None
     genai_session = None
@@ -89,21 +91,29 @@ class RTCConnection:
         def on_track(track):
             log_info("Track %s received", track.kind)
 
-            # Only accept the first track received for now
-            if self.recv_track:
-                return
-
             if track.kind == "audio":
-                self.recv_track = track
+                # Only accept the first track received for now
+                if self.recv_audio_track:
+                    return
+                
+                self.recv_audio_track = track
                 self.send_track = SendingTrack()
                 self.pc.addTrack(self.send_track)
-                asyncio.ensure_future(run_recv_track())
+                asyncio.ensure_future(run_recv_audio_track())
+
+            elif track.kind == "video":
+                # Only accept the first track received for now
+                if self.recv_video_track:
+                    return
+                
+                self.recv_video_track = track
+                asyncio.ensure_future(run_recv_video_track())
         
             @track.on("ended")
             async def on_ended():
                 log_info("Track %s ended", track.kind)
 
-        async def run_recv_track():
+        async def run_recv_audio_track():
             sample_rate = 16000
             resampler = AudioResampler(
                 format="s16", 
@@ -114,7 +124,7 @@ class RTCConnection:
 
             while True:
                 try:
-                    frame = await self.recv_track.recv()
+                    frame = await self.recv_audio_track.recv()
                     if not self.genai_session:
                         continue
                     for frame in resampler.resample(frame):
@@ -128,6 +138,27 @@ class RTCConnection:
                     log_info("Error receiving frame: %s", e)
                     break
 
+        async def run_recv_video_track():
+            while True:
+                try:
+                    frame = await self.recv_video_track.recv()
+                    if not self.genai_session:
+                        continue
+
+                    image = frame.to_image()
+                    array = io.BytesIO()
+                    image.save(array, format="JPEG")
+
+                    blob = genai.types.BlobDict(
+                        data=array.getvalue(), 
+                        mime_type=f"image/jpeg"
+                    )
+                    await self.genai_session.send(blob)
+
+                except Exception as e:
+                    log_info("Error receiving frame: %s", e)
+                    break
+            
         async def run_send_track():
             timestamp = 0
             buffer = b''

@@ -42,6 +42,6 @@ await pc.setRemoteDescription({ type: 'answer', sdp: await resp.text() })
 [X] Basic datachannels support
 [X] Gemini integration
 [ ] WebTransport interface (WIP)
-[ ] Video support
+[X] Video support
 [ ] Implement HTTP real-time control interface 
 ```
