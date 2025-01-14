@@ -11,12 +11,14 @@ from aiohttp import web
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, RTCConfiguration
 
 from av import AudioFrame, AudioResampler
+from PIL import Image
 
 from google import genai
 
 
 AUDIO_PTIME = 0.02
 AUDIO_BITRATE = 16000
+USE_VIDEO_BUFFER = False
 MODEL = "gemini-2.0-flash-exp"
 
 client = genai.Client(http_options={'api_version': 'v1alpha'})
@@ -139,6 +141,7 @@ class RTCConnection:
                     break
 
         async def run_recv_video_track():
+            buffer = []
             while True:
                 try:
                     frame = await self.recv_video_track.recv()
@@ -146,8 +149,21 @@ class RTCConnection:
                         continue
 
                     image = frame.to_image()
+
                     array = io.BytesIO()
-                    image.save(array, format="JPEG")
+                    if USE_VIDEO_BUFFER:
+                        buffer.append(image)
+                        if len(buffer) > 10:
+                            buffer.pop(0)
+
+                        # Compose horizontally all the images in buffer
+                        composite = Image.new('RGB', (image.width * len(buffer), image.height))
+                        for i in range(len(buffer)):
+                            composite.paste(buffer[i], (image.width * i, 0))
+
+                        composite.save(array, format="JPEG")
+                    else:
+                        image.save(array, format="JPEG")
 
                     blob = genai.types.BlobDict(
                         data=array.getvalue(), 
