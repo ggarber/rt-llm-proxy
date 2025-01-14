@@ -8,7 +8,12 @@ import ssl
 import uuid
 
 from aiohttp import web
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, RTCConfiguration
+from aiortc import (
+    MediaStreamTrack,
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCConfiguration,
+)
 
 from av import AudioFrame, AudioResampler
 from PIL import Image
@@ -21,7 +26,7 @@ AUDIO_BITRATE = 16000
 USE_VIDEO_BUFFER = False
 MODEL = "gemini-2.0-flash-exp"
 
-client = genai.Client(http_options={'api_version': 'v1alpha'})
+client = genai.Client(http_options={"api_version": "v1alpha"})
 
 logger = logging.getLogger("proxy")
 connections = set()
@@ -36,7 +41,7 @@ class SendingTrack(MediaStreamTrack):
 
     async def recv(self):
         return await self.queue.get()
-    
+
 
 class RTCConnection:
     recv_audio_track = None
@@ -50,7 +55,7 @@ class RTCConnection:
         offer = RTCSessionDescription(sdp=content, type="offer")
 
         self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
-        
+
         asyncio.ensure_future(self._run())
 
         await self.pc.setRemoteDescription(offer)
@@ -61,7 +66,11 @@ class RTCConnection:
         sdp = self.pc.localDescription.sdp
         found = re.findall(r"a=rtpmap:(\d+) opus/48000/2", sdp)
         if found:
-            sdp = sdp.replace("opus/48000/2\r\n", "opus/48000/2\r\n" + f"a=fmtp:{found[0]} useinbandfec=1;usedtx=1;maxaveragebitrate={AUDIO_BITRATE}\r\n")
+            sdp = sdp.replace(
+                "opus/48000/2\r\n",
+                "opus/48000/2\r\n"
+                + f"a=fmtp:{found[0]} useinbandfec=1;usedtx=1;maxaveragebitrate={AUDIO_BITRATE}\r\n",
+            )
 
         return web.Response(
             content_type="application/sdp",
@@ -86,7 +95,10 @@ class RTCConnection:
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
             log_info("Connection state is %s", self.pc.connectionState)
-            if self.pc.connectionState == "failed" or self.pc.connectionState == "closed":
+            if (
+                self.pc.connectionState == "failed"
+                or self.pc.connectionState == "closed"
+            ):
                 await self.close()
 
         @self.pc.on("track")
@@ -97,7 +109,7 @@ class RTCConnection:
                 # Only accept the first track received for now
                 if self.recv_audio_track:
                     return
-                
+
                 self.recv_audio_track = track
                 self.send_track = SendingTrack()
                 self.pc.addTrack(self.send_track)
@@ -107,10 +119,10 @@ class RTCConnection:
                 # Only accept the first track received for now
                 if self.recv_video_track:
                     return
-                
+
                 self.recv_video_track = track
                 asyncio.ensure_future(run_recv_video_track())
-        
+
             @track.on("ended")
             async def on_ended():
                 log_info("Track %s ended", track.kind)
@@ -118,7 +130,7 @@ class RTCConnection:
         async def run_recv_audio_track():
             sample_rate = 16000
             resampler = AudioResampler(
-                format="s16", 
+                format="s16",
                 layout="mono",
                 rate=sample_rate,
                 frame_size=int(sample_rate * AUDIO_PTIME),
@@ -131,8 +143,8 @@ class RTCConnection:
                         continue
                     for frame in resampler.resample(frame):
                         blob = genai.types.BlobDict(
-                            data=frame.to_ndarray().tobytes(), 
-                            mime_type=f"audio/pcm;rate={sample_rate}"
+                            data=frame.to_ndarray().tobytes(),
+                            mime_type=f"audio/pcm;rate={sample_rate}",
                         )
                         await self.genai_session.send(blob)
 
@@ -157,7 +169,9 @@ class RTCConnection:
                             buffer.pop(0)
 
                         # Compose horizontally all the images in buffer
-                        composite = Image.new('RGB', (image.width * len(buffer), image.height))
+                        composite = Image.new(
+                            "RGB", (image.width * len(buffer), image.height)
+                        )
                         for i in range(len(buffer)):
                             composite.paste(buffer[i], (image.width * i, 0))
 
@@ -166,36 +180,37 @@ class RTCConnection:
                         image.save(array, format="JPEG")
 
                     blob = genai.types.BlobDict(
-                        data=array.getvalue(), 
-                        mime_type=f"image/jpeg"
+                        data=array.getvalue(), mime_type=f"image/jpeg"
                     )
                     await self.genai_session.send(blob)
 
                 except Exception as e:
                     log_info("Error receiving frame: %s", e)
                     break
-            
+
         async def run_send_track():
             timestamp = 0
-            buffer = b''
+            buffer = b""
             while True:
                 turn = self.genai_session.receive()
                 async for response in turn:
                     if response.data is None:
-                        log_info(f'Server Message - {response}')
+                        log_info(f"Server Message - {response}")
                         continue
 
-                    mime_type = response.server_content.model_turn.parts[0].inline_data.mime_type
-                    sample_rate = int(mime_type.split('rate=')[1])
+                    mime_type = response.server_content.model_turn.parts[
+                        0
+                    ].inline_data.mime_type
+                    sample_rate = int(mime_type.split("rate=")[1])
                     samples = int(sample_rate * AUDIO_PTIME)
 
                     buffer += response.data
-                    
+
                     while len(buffer) / 2 >= samples:
                         frame = AudioFrame(format="s16", layout="mono", samples=samples)
                         frame.sample_rate = sample_rate
-                        frame.planes[0].update(buffer[:samples*2])
-                        buffer = buffer[samples*2:]
+                        frame.planes[0].update(buffer[: samples * 2])
+                        buffer = buffer[samples * 2 :]
 
                         timestamp += sample_rate * AUDIO_PTIME
                         frame.pts = timestamp
@@ -203,11 +218,13 @@ class RTCConnection:
                         await self.send_track.queue.put(frame)
                         await asyncio.sleep(AUDIO_PTIME)
 
-
         try:
-            async with client.aio.live.connect(model=MODEL, config={
-                "generation_config": { "response_modalities": ["AUDIO"] },
-            }) as session:
+            async with client.aio.live.connect(
+                model=MODEL,
+                config={
+                    "generation_config": {"response_modalities": ["AUDIO"]},
+                },
+            ) as session:
                 log_info("Connected to GenAI session")
                 self.genai_session = session
                 # await session.send(input="Sing a song", end_of_turn=True)
@@ -250,7 +267,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    logging.getLogger('aioice').setLevel(level=logging.WARN)
+    logging.getLogger("aioice").setLevel(level=logging.WARN)
 
     if args.cert_file:
         ssl_context = ssl.SSLContext()
