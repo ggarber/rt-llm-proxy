@@ -126,7 +126,7 @@ async function start() {
             if (track.kind === 'video') {
                 track = track.clone();
                 track.applyConstraints({
-                    frameRate: 1,
+                    frameRate: 5,
                 });
             }
             pc.addTrack(track, stream);

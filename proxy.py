@@ -4,6 +4,7 @@ import fractions
 import logging
 import re
 import ssl
+import time
 import uuid
 
 from aiohttp import web
@@ -91,6 +92,9 @@ class RTCConnection:
 
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
+            if not self.pc:
+                return
+
             log_info("Connection state is %s", self.pc.connectionState)
             if (
                 self.pc.connectionState == "failed"
@@ -138,11 +142,17 @@ class RTCConnection:
 
         async def run_recv_video_track():
             buffer = []
+            last_frame_time = 0
             while self.pc and self.pc.connectionState != "closed":
                 try:
                     frame = await self.recv_video_track.recv()
                     if not self.genai_session:
                         continue
+
+                    # Limit the frame rate processed to 1 fps
+                    if time.time() - last_frame_time < 1:
+                        continue
+                    last_frame_time = time.time()
 
                     image = frame.to_image()
 
