@@ -54,10 +54,11 @@ function enumerateInputDevices() {
 }
 
 async function negotiate() {
+    const model = document.getElementById('model').value;
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    const response = await fetch('/', {
+    const response = await fetch(`/?model=${model}`, {
         body: offer.sdp,
         headers: {
             'Content-Type': 'application/sdp'

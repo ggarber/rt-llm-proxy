@@ -1,8 +1,9 @@
 aiortc
 aioquic
 aiohttp
-google-genai
 websockets
 taskgroup
 asyncio
 numpy
+google-genai
+openai[realtime]

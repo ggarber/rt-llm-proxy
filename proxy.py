@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import fractions
-import io
 import logging
 import re
 import ssl
@@ -15,18 +14,15 @@ from aiortc import (
     RTCConfiguration,
 )
 
-from av import AudioFrame, AudioResampler
+from av import AudioFrame
 from PIL import Image
 
-from google import genai
-
+from model_gemini import connect_gemini
+from model_openai import connect_openai
 
 AUDIO_PTIME = 0.02
 AUDIO_BITRATE = 16000
 USE_VIDEO_BUFFER = False
-MODEL = "gemini-2.0-flash-exp"
-
-client = genai.Client(http_options={"api_version": "v1alpha"})
 
 logger = logging.getLogger("proxy")
 connections = set()
@@ -56,7 +52,8 @@ class RTCConnection:
 
         self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
 
-        asyncio.ensure_future(self._run())
+        model = request.query.get("model")
+        asyncio.ensure_future(self._run(model))
 
         await self.pc.setRemoteDescription(offer)
 
@@ -77,7 +74,7 @@ class RTCConnection:
             text=sdp,
         )
 
-    async def _run(self):
+    async def _run(self, model):
         pc_id = str(uuid.uuid4())
 
         def log_info(msg, *args):
@@ -90,7 +87,7 @@ class RTCConnection:
             @channel.on("message")
             async def on_message(message):
                 if self.genai_session:
-                    await self.genai_session.send(input=message, end_of_turn=True)
+                    await self.genai_session.send(message)
 
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
@@ -128,25 +125,12 @@ class RTCConnection:
                 log_info("Track %s ended", track.kind)
 
         async def run_recv_audio_track():
-            sample_rate = 16000
-            resampler = AudioResampler(
-                format="s16",
-                layout="mono",
-                rate=sample_rate,
-                frame_size=int(sample_rate * AUDIO_PTIME),
-            )
-
             while True:
                 try:
                     frame = await self.recv_audio_track.recv()
                     if not self.genai_session:
                         continue
-                    for frame in resampler.resample(frame):
-                        blob = genai.types.BlobDict(
-                            data=frame.to_ndarray().tobytes(),
-                            mime_type=f"audio/pcm;rate={sample_rate}",
-                        )
-                        await self.genai_session.send(blob)
+                    await self.genai_session.send(frame)
 
                 except Exception as e:
                     log_info("Error receiving frame: %s", e)
@@ -154,7 +138,7 @@ class RTCConnection:
 
         async def run_recv_video_track():
             buffer = []
-            while True:
+            while self.pc and self.pc.connectionState != "closed":
                 try:
                     frame = await self.recv_video_track.recv()
                     if not self.genai_session:
@@ -162,7 +146,6 @@ class RTCConnection:
 
                     image = frame.to_image()
 
-                    array = io.BytesIO()
                     if USE_VIDEO_BUFFER:
                         buffer.append(image)
                         if len(buffer) > 10:
@@ -175,14 +158,9 @@ class RTCConnection:
                         for i in range(len(buffer)):
                             composite.paste(buffer[i], (image.width * i, 0))
 
-                        composite.save(array, format="JPEG")
+                        await self.genai_session.send(composite)
                     else:
-                        image.save(array, format="JPEG")
-
-                    blob = genai.types.BlobDict(
-                        data=array.getvalue(), mime_type=f"image/jpeg"
-                    )
-                    await self.genai_session.send(blob)
+                        await self.genai_session.send(image)
 
                 except Exception as e:
                     log_info("Error receiving frame: %s", e)
@@ -191,20 +169,11 @@ class RTCConnection:
         async def run_send_track():
             timestamp = 0
             buffer = b""
-            while True:
-                turn = self.genai_session.receive()
-                async for response in turn:
-                    if response.data is None:
-                        log_info(f"Server Message - {response}")
-                        continue
-
-                    mime_type = response.server_content.model_turn.parts[
-                        0
-                    ].inline_data.mime_type
-                    sample_rate = int(mime_type.split("rate=")[1])
+            while self.pc and self.pc.connectionState != "closed":
+                async for frame in self.genai_session.recv():
+                    sample_rate = frame.sample_rate
                     samples = int(sample_rate * AUDIO_PTIME)
-
-                    buffer += response.data
+                    buffer += frame.to_ndarray().tobytes()
 
                     while len(buffer) / 2 >= samples:
                         frame = AudioFrame(format="s16", layout="mono", samples=samples)
@@ -219,30 +188,31 @@ class RTCConnection:
                         await asyncio.sleep(AUDIO_PTIME)
 
         try:
-            async with client.aio.live.connect(
-                model=MODEL,
-                config={
-                    "generation_config": {"response_modalities": ["AUDIO"]},
-                },
-            ) as session:
+            connect_genai = connect_openai if model == "openai" else connect_gemini
+            async with connect_genai() as session:
                 log_info("Connected to GenAI session")
                 self.genai_session = session
-                # await session.send(input="Sing a song", end_of_turn=True)
 
                 await run_send_track()
+                log_info("Connection finished")
 
         except Exception as e:
             log_info("Error sending frame: %s", e)
 
-        await self.close()
+        try:
+            await self.close()
+        except Exception as e:
+            log_info("Error closing connection: %s", e)
         connections.discard(self)
         log_info(f"Connection stopped. Connections {len(connections)}")
 
     async def close(self):
         if self.pc:
             await self.pc.close()
+            self.pc = None
         if self.genai_session:
             await self.genai_session.close()
+            self.genai_session = None
 
 
 async def offer(request):
